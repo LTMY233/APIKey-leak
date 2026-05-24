@@ -441,7 +441,7 @@ class _AsyncTokenPool:
         return "".join(parts) if parts else ""
 
 
-async def _search_pages(session, query, start_page, end_page, token_idx):
+async def _search_pages(session, query, start_page, end_page, token_idx, on_page=None):
     tk = TOKEN_POOL[token_idx]
     items = []
     for page in range(start_page, end_page + 1):
@@ -457,6 +457,8 @@ async def _search_pages(session, query, start_page, end_page, token_idx):
             if status != 200:
                 continue
             items.extend(batch)
+            if on_page:
+                await on_page()
             read_time = min(len(batch) * random.uniform(0.02, 0.08), 8)
             if read_time > 0.3:
                 await asyncio.sleep(read_time)
@@ -576,22 +578,33 @@ async def run_scan(start_page, end_page, concurrency, target, extra_queries=None
 
             total_tasks = len(search_tasks)
             stats.queries_run += total_tasks
-            _upd(f"{c('C', f'调度 {total_tasks} 个搜索任务，并发执行中 ...')}")
-
             # 并发搜索
             search_sem = asyncio.Semaphore(min(concurrency, n_tokens * 5))
+
+            completed = 0
+            found_total = 0
+            pages_done = 0
+            total_pages = total_tasks * (end_page - start_page + 1)
+
+            def _status():
+                ts = token_pool.status_line()
+                pg = f"{pages_done}/{total_pages}" if total_pages else "?"
+                _upd(f"{c('K', 'Token[')}{ts}{c('K', ']')}  {c('K', '│')}  {c('C', f'页:{pg}')}  {c('K', '│')}  {c('G', f'命中:{found_total}')}  {c('Y', f'有效:{stats.keys_valid}')}  {c('C', f'验证中:{len(vtasks)}')}")
+
+            _status()
 
             async def search_worker(task):
                 provider_enum, pdef, full_query, date_label = task
                 idx, tk = await token_pool.acquire()
                 try:
-                    items = await _search_pages(session, full_query, start_page, end_page, idx)
+                    async def _page_done():
+                        nonlocal pages_done
+                        pages_done += 1
+                        _status()
+                    items = await _search_pages(session, full_query, start_page, end_page, idx, on_page=_page_done)
                     return items, provider_enum
                 finally:
                     token_pool.release(idx)
-
-            completed = 0
-            found_total = 0
 
             async def _run_one(task):
                 nonlocal completed, found_total
@@ -600,8 +613,7 @@ async def run_scan(start_page, end_page, concurrency, target, extra_queries=None
                 completed += 1
                 items, _ = result
                 found_total += len(items)
-                ts = token_pool.status_line()
-                _upd(f"{c('K', 'Token[')}{ts}{c('K', ']')}  {c('K', '│')}  {c('C', f'搜索:{completed}/{total_tasks}')}  {c('G', f'命中:{found_total}')}  {c('Y', f'有效:{stats.keys_valid}')}  {c('C', f'验证中:{len(vtasks)}')}")
+                _status()
                 return result
 
             results = await asyncio.gather(*(_run_one(t) for t in search_tasks), return_exceptions=True)
