@@ -48,11 +48,10 @@ python APIKey_leak.py
 [3/4] 搜索范围
   输入页码范围，如 1~10，范围越大搜得越多越慢
 
-[4/4] 排序/筛选
-  1. 最新提交   — 按索引时间降序
-  2. 最多Star   — 只看高星仓库（Star>50）
-  3. 最少Star   — 只看低星仓库（Star<5）
-  4. 最佳匹配   — GitHub 默认相关度
+[4/4] 排序方式
+  1. 最新优先  ← 默认
+  2. 最早优先
+  3. 最佳匹配
 ```
 
 然后输入 `y` 开始扫描，等待结果。
@@ -77,7 +76,6 @@ python APIKey_leak.py \
   --providers OPENAI DEEPSEEK ANTHROPIC \
   --start-page 1 --end-page 5 \
   --days 7 \
-  --stars ">50" \
   --csv result.csv \
   --no-interactive
 ```
@@ -93,19 +91,18 @@ python APIKey_leak.py \
 | `--days` | 7 | 搜索最近 N 天内的提交 |
 | `--sort` | `indexed` | 排序字段，留空=最佳匹配 |
 | `--order` | `desc` | `desc` 降序 / `asc` 升序 |
-| `--stars` | - | Star 筛选，如 `>50` / `<5` |
+| `--search-rate` | 10 | 代码搜索限速（次/分钟） |
 | `--concurrency` | 25 | 验证并发数 |
 | `--output` | `api_key_leak_results.json` | 结果输出路径 |
 | `--csv` | - | 同时导出 CSV |
 | `--no-interactive` | - | 跳过交互，直接扫描 |
 
-## 排序/筛选
+## 排序
 
 | 选项 | 对应参数 | 效果 |
 |------|----------|------|
-| 最新提交 | `--sort indexed --order desc` | 最近索引的文件在前 |
-| 最多Star | `--stars ">50"` | 只扫 Star>50 的仓库 |
-| 最少Star | `--stars "<5"` | 只扫 Star<5 的仓库 |
+| 最新优先 | `--sort indexed --order desc` | 最近索引的文件在前（默认） |
+| 最早优先 | `--sort indexed --order asc` | 最早索引的文件在前 |
 | 最佳匹配 | `--sort ""` | GitHub 默认相关度 |
 
 ## 多 Token 怎么来
