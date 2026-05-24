@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+import random
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
@@ -183,7 +184,9 @@ TOKEN_STATE = {}
 CUSTOM_QUERIES = []
 SORT_FIELD = "indexed"
 SORT_ORDER = "desc"
-QUERY_FILTER = ""
+SEARCH_RATE = 10
+_search_ts = []
+_search_ts_lock = asyncio.Lock()
 
 def _update_token(idx, remain, reset_ts):
     TOKEN_STATE[idx] = {"remain": remain, "reset": reset_ts}
@@ -206,14 +209,63 @@ def classify_key(key):
     if l.startswith("sk-"): return Provider.OPENAI
     return None
 
-# GitHub 搜索
-async def _do_search(session, query, page, page_size, token_idx, token_str):
-    hdrs = {
+# 反爬
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+_ACCEPT_LANG = "zh-CN,zh;q=0.9,en;q=0.8"
+
+def _build_headers(token_str):
+    return {
         "Authorization": f"Bearer {token_str}",
+        "User-Agent": _UA,
         "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "APIKeyLeak/1.0"
+        "Accept-Language": _ACCEPT_LANG,
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "Referer": "https://github.com/search?q=api+key&type=code",
     }
-    params = {"q": query, "per_page": page_size, "page": page}
+
+
+def _human_delay(seconds):
+    return max(0, random.gauss(seconds, seconds * 0.3))
+
+_last_rest = time.time()
+
+async def _maybe_rest():
+    global _last_rest
+    if time.time() - _last_rest > random.uniform(90, 180):
+        pause = random.uniform(15, 45)
+        await asyncio.sleep(pause)
+        _last_rest = time.time()
+
+# GitHub 搜索
+async def _wait_rate():
+    async with _search_ts_lock:
+        now = time.time()
+        cutoff = now - 60
+        while _search_ts and _search_ts[0] < cutoff:
+            _search_ts.pop(0)
+        if len(_search_ts) >= SEARCH_RATE:
+            wait = _search_ts[0] - cutoff + random.uniform(1, 5)
+            if wait > 0:
+                await asyncio.sleep(wait)
+                _search_ts.clear()
+        _search_ts.append(time.time())
+
+async def _do_search(session, query, page, page_size, token_idx, token_str):
+    await _wait_rate()
+    await _maybe_rest()
+    if page == 1:
+        await asyncio.sleep(_human_delay(5))
+    elif page <= 3:
+        await asyncio.sleep(_human_delay(1.5))
+    else:
+        await asyncio.sleep(_human_delay(0.5))
+    hdrs = _build_headers(token_str)
+    page_size = page_size - random.randint(0, 3)
+    params = {"q": query, "per_page": str(page_size), "page": str(page)}
     if SORT_FIELD:
         params["sort"] = SORT_FIELD
         params["order"] = SORT_ORDER
@@ -393,15 +445,26 @@ async def _search_pages(session, query, start_page, end_page, token_idx):
     tk = TOKEN_POOL[token_idx]
     items = []
     for page in range(start_page, end_page + 1):
-        status, batch, remain, reset_ts = await _do_search(session, query, page, 100, token_idx, tk)
-        _update_token(token_idx, remain, reset_ts)
-        if status == 422:
+        for retry in range(3):
+            status, batch, remain, reset_ts = await _do_search(session, query, page, 100, token_idx, tk)
+            _update_token(token_idx, remain, reset_ts)
+            if status == 422:
+                return items
+            if status == 403:
+                wait = max(reset_ts - time.time(), 5)
+                await asyncio.sleep(wait)
+                continue
+            if status != 200:
+                continue
+            items.extend(batch)
+            read_time = min(len(batch) * random.uniform(0.02, 0.08), 8)
+            if read_time > 0.3:
+                await asyncio.sleep(read_time)
+            if random.random() < 0.15:
+                await asyncio.sleep(random.uniform(1, 3))
             break
-        if status == 403:
-            break
-        if status != 200:
-            continue
-        items.extend(batch)
+        else:
+            return items
     return items
 
 
@@ -439,18 +502,14 @@ async def run_scan(start_page, end_page, concurrency, target, extra_queries=None
     print(f"\n  {c('B', '═' * 55)}")
     print(f"  {c('bold', '目标:')} {c('W', names)}")
     print(f"  {c('bold', '日期:')} {c('W', f'近{days}天 (≥{date_cut})')}  {c('K', '│')}  {c('bold', '页码:')} {c('W', f'{start_page}-{end_page}')}")
-    if QUERY_FILTER:
-        sort_info = QUERY_FILTER
-    elif SORT_FIELD:
-        sort_info = f"{SORT_FIELD}/{SORT_ORDER}"
-    else:
-        sort_info = "最佳匹配"
-    print(f"  {c('bold', 'Token池:')} {c('W', str(n_tokens))}  {c('K', '│')}  {c('bold', '检索:')} {c('W', f'{base_q}×{days}天={base_q*days}次')}  {c('K', '│')}  {c('bold', '并发:')} {c('W', str(concurrency))}")
+    sort_info = f"{SORT_FIELD}/{SORT_ORDER}" if SORT_FIELD else "最佳匹配"
+    print(f"  {c('bold', 'Token池:')} {c('W', str(n_tokens))}  {c('K', '│')}  {c('bold', '限速:')} {c('W', f'{SEARCH_RATE}次/分')}  {c('K', '│')}  {c('bold', '检索:')} {c('W', f'{base_q}×{days}天={base_q*days}次')}  {c('K', '│')}  {c('bold', '并发:')} {c('W', str(concurrency))}")
     print(f"  {c('bold', '排序:')} {c('W', sort_info)}")
     print(f"  {c('B', '═' * 55)}\n")
     print(f"  {c('C', '[>]')} {c('C', '开始检索')}\n")
 
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(limit=2, limit_per_host=2, force_close=False, enable_cleanup_closed=True, keepalive_timeout=60)
+    async with aiohttp.ClientSession(connector=connector, headers={"Accept-Encoding": "gzip, deflate, br"}) as session:
         async def fetch_and_extract(item, pe):
             fn = item["repository"]["full_name"]; fp = item["path"]
             if (fn, fp) in seen_files: return []
@@ -513,10 +572,7 @@ async def run_scan(start_page, end_page, concurrency, target, extra_queries=None
                 if CUSTOM_QUERIES: queries.extend(CUSTOM_QUERIES)
                 for q in queries:
                     for date_filter, date_label in date_slices:
-                        full_q = f"{q} {date_filter}"
-                        if QUERY_FILTER:
-                            full_q = f"{full_q} {QUERY_FILTER}"
-                        search_tasks.append((provider_enum, pdef, full_q, date_label))
+                        search_tasks.append((provider_enum, pdef, f"{q} {date_filter}", date_label))
 
             total_tasks = len(search_tasks)
             stats.queries_run += total_tasks
@@ -629,7 +685,7 @@ def show_logo():
     print(f"  {c('K','仅限授权的安全研究使用')}\n")
 
 # Token 本地保存
-TOKEN_STORE_FILE = os.path.join(os.path.expanduser("~/Desktop"), ".token_store.json")
+TOKEN_STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".token_store.json")
 
 def _load_token_store():
     if not os.path.exists(TOKEN_STORE_FILE): return []
@@ -671,6 +727,7 @@ def input_token():
             if ch == str(len(saved) + 1):
                 return _manual_token_input(saved)
             if ch == str(len(saved) + 2):
+                
                 _delete_menu(saved)
                 saved = _load_token_store()
                 if not saved: return _manual_token_input([])
@@ -784,8 +841,8 @@ def select_providers():
         print(f"  重新选择")
 
 def input_pages():
-    print(c("bold","\n[3/4] 搜索范围"))
-    print(f"  例如1~10 范围越大 搜索时间越长")
+    print(c("bold","\n[3/4] 页码范围"))
+    print(f"  搜索范围 例如1~10 范围越大 搜索时间越长")
     while True:
         try: ch = input(f"  范围 (回车=1-3): ").strip()
         except: return 1, 3, ""
@@ -802,27 +859,22 @@ def input_pages():
     return sp, ep, kw
 
 def input_sort_order():
-    global SORT_FIELD, SORT_ORDER, QUERY_FILTER
-    print(c("bold","\n[4/4] 排序/筛选"))
-    print(f"    1. 最新提交  ← 默认")
-    print(f"    2. 最多Star")
-    print(f"    3. 最少Star")
-    print(f"    4. 最佳匹配")
+    global SORT_FIELD, SORT_ORDER
+    print(c("bold","\n[4/4] 排序方式"))
+    print(f"    1. 最新优先  ← 默认")
+    print(f"    2. 最早优先")
+    print(f"    3. 最佳匹配")
     while True:
         try: ch = input(f"  选择 (回车=1): ").strip()
         except: return
         if not ch or ch == "1":
-            SORT_FIELD, SORT_ORDER, QUERY_FILTER = "indexed", "desc", ""; break
+            SORT_FIELD, SORT_ORDER = "indexed", "desc"; break
         if ch == "2":
-            SORT_FIELD, SORT_ORDER, QUERY_FILTER = "", "", "stars:>50"; break
+            SORT_FIELD, SORT_ORDER = "indexed", "asc"; break
         if ch == "3":
-            SORT_FIELD, SORT_ORDER, QUERY_FILTER = "", "", "stars:<5"; break
-        if ch == "4":
-            SORT_FIELD, SORT_ORDER, QUERY_FILTER = "", "", ""; break
+            SORT_FIELD, SORT_ORDER = "", ""; break
         print(f"  无效选择")
-    if QUERY_FILTER:
-        print(f"  筛选: {QUERY_FILTER}")
-    elif SORT_FIELD:
+    if SORT_FIELD:
         print(f"  排序: {SORT_FIELD} / {SORT_ORDER}")
     else:
         print(f"  排序: 最佳匹配")
@@ -914,7 +966,7 @@ def parse_args():
     p.add_argument("--days",type=int,default=7,help="只搜最近N天提交的仓库，默认7天")
     p.add_argument("--sort",default=None,choices=["indexed",""],help="排序字段，默认indexed。留空=最佳匹配")
     p.add_argument("--order",default=None,choices=["desc","asc"],help="排序方向，默认desc")
-    p.add_argument("--stars",default=None,help="Star筛选，如 '>50' 或 '<5'")
+    p.add_argument("--search-rate",type=int,default=10,help="代码搜索限速（次/分钟），默认10")
     p.add_argument("--no-interactive",action="store_true",help="纯自动模式，不交互")
     return p.parse_args()
 
@@ -961,22 +1013,19 @@ async def main():
     print(f"  页码: {sp}-{ep} ({ep-sp+1}页)")
 
     # 排序
-    global SORT_FIELD, SORT_ORDER, QUERY_FILTER
-    if args.stars is not None:
-        QUERY_FILTER = f"stars:{args.stars}"
-        SORT_FIELD, SORT_ORDER = "", ""
-    elif args.sort is not None or args.order is not None:
+    global SORT_FIELD, SORT_ORDER
+    if args.sort is not None or args.order is not None:
         SORT_FIELD = args.sort if args.sort is not None else "indexed"
         SORT_ORDER = args.order if args.order is not None else "desc"
     elif interactive:
         input_sort_order()
-    if QUERY_FILTER:
-        print(f"  筛选: {QUERY_FILTER}")
-    elif SORT_FIELD:
+    if SORT_FIELD:
         print(f"  排序: {SORT_FIELD} / {SORT_ORDER}")
     else:
         print(f"  排序: 最佳匹配")
 
+    global SEARCH_RATE
+    SEARCH_RATE = args.search_rate
     concurrency = args.concurrency or 25
 
     if interactive:
