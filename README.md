@@ -1,19 +1,19 @@
 # APIKey Leak
 
-GitHub AI 密钥泄漏扫描器 — 搜索 GitHub 上意外暴露的 AI 厂商 API Key 并自动验证有效性。
+GitHub 上搜索 AI 厂商意外泄露的 API Key，自动验证有效性和查询余额。
 
-## 支持的厂商
+## 能干什么
 
-OpenAI / DeepSeek / Anthropic / Google AI / HuggingFace / xAI / Cohere / Replicate / Together AI / Mistral / Groq / Perplexity / Jina AI / Voyage AI / Fireworks AI / DeepInfra / Novita AI / SiliconFlow / AI21 Labs
+很多开发者在提交代码时，不小心把 API Key 一起传到了 GitHub。这个工具可以批量扫描 GitHub 公开仓库，找出这些泄露的密钥，并自动验证是否还有效、还剩多少余额。
 
-## 功能
+**覆盖 19 家 AI 厂商：** OpenAI / DeepSeek / Anthropic / Google AI / HuggingFace / xAI / Cohere / Replicate / Together AI / Mistral / Groq / Perplexity / Jina AI / Voyage AI / Fireworks AI / DeepInfra / Novita AI / SiliconFlow / AI21 Labs
 
-- 多 Token 并发搜索，突破 GitHub 速率限制
-- 自动验证密钥有效性 + 查询可用模型列表 + 余额查询
-- 日期分片搜索，突破单查询 1000 条上限
-- 支持 Star 筛选（高星仓库 / 低星仓库）
-- 支持排序方式选择（最新提交 / 最佳匹配）
-- 结果导出 JSON + CSV
+## 工作原理
+
+1. 用 GitHub Token 调用 Code Search API，搜索包含密钥特征的文件
+2. 用正则提取疑似密钥
+3. 调用各厂商 API 验证密钥是否有效
+4. 查询可用模型 + 余额
 
 ## 安装
 
@@ -21,52 +21,102 @@ OpenAI / DeepSeek / Anthropic / Google AI / HuggingFace / xAI / Cohere / Replica
 pip install -r requirements.txt
 ```
 
-## 使用
+## 快速开始
 
-### 交互模式（推荐）
+### 第一步：准备 GitHub Token
+
+打开 https://github.com/settings/tokens → **Generate new token (classic)** → 不用勾任何权限 → 生成后复制。
+
+Token 越多扫描越快（每人免费额度 30 次/分钟），建议准备 3~5 个。
+
+### 第二步：启动
 
 ```bash
 python APIKey_leak.py
 ```
 
-按提示 4 步完成配置：
-1. 输入 GitHub Token（支持多 Token 并发）
-2. 选择目标厂商
-3. 设置搜索范围（1~10，范围越大越慢）
-4. 选择排序/筛选方式
+### 第三步：按提示配置
 
-### 命令行模式
+```
+[1/4] 配置GitHub Token
+  粘贴 Token，支持多个用逗号/空格/换行分隔
+  输入完回车确认，可保存到本地下次直接加载
 
-```bash
-python APIKey_leak.py --token "ghp_xxx,ghp_yyy" --providers OPENAI DEEPSEEK --start-page 1 --end-page 3 --days 7 --no-interactive
+[2/4] 选择厂商
+  输入序号，多选用逗号隔开，1-5 框选，回车=全选
+
+[3/4] 搜索范围
+  输入页码范围，如 1~10，范围越大搜得越多越慢
+
+[4/4] 排序/筛选
+  1. 最新提交   — 按索引时间降序
+  2. 最多Star   — 只看高星仓库（Star>50）
+  3. 最少Star   — 只看低星仓库（Star<5）
+  4. 最佳匹配   — GitHub 默认相关度
 ```
 
-| 参数 | 说明 |
-|------|------|
-| `--token` | GitHub Token，多个逗号分隔 |
-| `--providers` | 厂商，如 OPENAI DEEPSEEK |
-| `--start-page` / `--end-page` | 页码范围 |
-| `--days` | 搜索最近 N 天，默认 7 |
-| `--sort` | 排序字段 `indexed`，留空=最佳匹配 |
-| `--order` | 排序方向 `desc` / `asc` |
-| `--stars` | Star 筛选，如 `>50` 或 `<5` |
-| `--output` | 输出 JSON 路径 |
-| `--csv` | 输出 CSV 路径 |
-| `--no-interactive` | 纯自动模式，跳过交互 |
+然后输入 `y` 开始扫描，等待结果。
 
-### 获取 GitHub Token
+### 输出结果
 
-https://github.com/settings/tokens → 创建 classic token，无需勾选任何权限。
+扫描完成后会显示每个密钥的：
+- 厂商、密钥内容
+- 来源仓库链接
+- 可用模型列表
+- 账户余额
 
-## 排序/筛选说明
+同时会保存 `api_key_leak_results.json`，支持 `--csv result.csv` 导出 CSV。
 
-| 选项 | 效果 |
-|------|------|
-| 最新提交 | 按索引时间降序 |
-| 最多Star | 只看 Star > 50 的仓库 |
-| 最少Star | 只看 Star < 5 的仓库 |
-| 最佳匹配 | GitHub 默认相关度排序 |
+## 命令行模式
+
+不想交互？一波带参数跑完：
+
+```bash
+python APIKey_leak.py \
+  --token "ghp_xxx,ghp_yyy,ghp_zzz" \
+  --providers OPENAI DEEPSEEK ANTHROPIC \
+  --start-page 1 --end-page 5 \
+  --days 7 \
+  --stars ">50" \
+  --csv result.csv \
+  --no-interactive
+```
+
+## 参数说明
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `--token` | - | GitHub Token，多个逗号分隔 |
+| `--providers` | 全部 | 厂商名，如 `OPENAI DEEPSEEK` |
+| `--start-page` | 1 | 起始页，每页 100 条 |
+| `--end-page` | 3 | 结束页，无上限 |
+| `--days` | 7 | 搜索最近 N 天内的提交 |
+| `--sort` | `indexed` | 排序字段，留空=最佳匹配 |
+| `--order` | `desc` | `desc` 降序 / `asc` 升序 |
+| `--stars` | - | Star 筛选，如 `>50` / `<5` |
+| `--concurrency` | 25 | 验证并发数 |
+| `--output` | `api_key_leak_results.json` | 结果输出路径 |
+| `--csv` | - | 同时导出 CSV |
+| `--no-interactive` | - | 跳过交互，直接扫描 |
+
+## 排序/筛选
+
+| 选项 | 对应参数 | 效果 |
+|------|----------|------|
+| 最新提交 | `--sort indexed --order desc` | 最近索引的文件在前 |
+| 最多Star | `--stars ">50"` | 只扫 Star>50 的仓库 |
+| 最少Star | `--stars "<5"` | 只扫 Star<5 的仓库 |
+| 最佳匹配 | `--sort ""` | GitHub 默认相关度 |
+
+## 多 Token 怎么来
+
+一个 GitHub 账号可以创建多个 classic token，每个都有独立的 30 次/分钟搜索额度。5 个 Token = 150 次/分钟，速度翻 5 倍。
 
 ## 免责声明
 
-仅限授权的安全研究、渗透测试和教育用途。使用者自行承担所有法律责任。
+**仅限以下用途：**
+- 授权的安全研究和渗透测试
+- 自己仓库的密钥泄漏自查
+- 安全教育和学术研究
+
+使用者自行承担所有法律责任。
