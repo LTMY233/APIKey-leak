@@ -558,7 +558,7 @@ async def run_scan(start_page, end_page, concurrency, target, extra_queries=None
                 _say(f"  {c('Y', '[!]')} 近{prev_try_days}天未发现任何结果，自动扩大至 {c('W', f'近{try_days}天')} ...")
                 print()
 
-            # 日期分片：每天独立查询突破单查询1000条上限
+            # 日期分片
             date_slices = []
             for i in range(try_days):
                 day_end = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
@@ -708,7 +708,7 @@ def _load_token_store():
 
 def _save_token_profile(name, token_str):
     profiles = _load_token_store()
-    # 去重：同名覆盖
+    # 去重
     profiles = [p for p in profiles if p["name"] != name]
     profiles.append({
         "name": name,
