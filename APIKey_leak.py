@@ -181,6 +181,9 @@ SEMAPHORE = None
 TOKEN_POOL = []
 TOKEN_STATE = {}
 CUSTOM_QUERIES = []
+SORT_FIELD = "indexed"
+SORT_ORDER = "desc"
+QUERY_FILTER = ""
 
 def _update_token(idx, remain, reset_ts):
     TOKEN_STATE[idx] = {"remain": remain, "reset": reset_ts}
@@ -210,7 +213,10 @@ async def _do_search(session, query, page, page_size, token_idx, token_str):
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "APIKeyLeak/1.0"
     }
-    params = {"q": query, "per_page": page_size, "page": page, "sort": "indexed", "order": "desc"}
+    params = {"q": query, "per_page": page_size, "page": page}
+    if SORT_FIELD:
+        params["sort"] = SORT_FIELD
+        params["order"] = SORT_ORDER
     async with session.get(SEARCH_EP, headers=hdrs, params=params) as r:
         reset_ts = int(r.headers.get("X-RateLimit-Reset", time.time() + 60))
         remain = int(r.headers.get("X-RateLimit-Remaining", 30))
@@ -433,7 +439,14 @@ async def run_scan(start_page, end_page, concurrency, target, extra_queries=None
     print(f"\n  {c('B', '═' * 55)}")
     print(f"  {c('bold', '目标:')} {c('W', names)}")
     print(f"  {c('bold', '日期:')} {c('W', f'近{days}天 (≥{date_cut})')}  {c('K', '│')}  {c('bold', '页码:')} {c('W', f'{start_page}-{end_page}')}")
+    if QUERY_FILTER:
+        sort_info = QUERY_FILTER
+    elif SORT_FIELD:
+        sort_info = f"{SORT_FIELD}/{SORT_ORDER}"
+    else:
+        sort_info = "最佳匹配"
     print(f"  {c('bold', 'Token池:')} {c('W', str(n_tokens))}  {c('K', '│')}  {c('bold', '检索:')} {c('W', f'{base_q}×{days}天={base_q*days}次')}  {c('K', '│')}  {c('bold', '并发:')} {c('W', str(concurrency))}")
+    print(f"  {c('bold', '排序:')} {c('W', sort_info)}")
     print(f"  {c('B', '═' * 55)}\n")
     print(f"  {c('C', '[>]')} {c('C', '开始检索')}\n")
 
@@ -500,7 +513,10 @@ async def run_scan(start_page, end_page, concurrency, target, extra_queries=None
                 if CUSTOM_QUERIES: queries.extend(CUSTOM_QUERIES)
                 for q in queries:
                     for date_filter, date_label in date_slices:
-                        search_tasks.append((provider_enum, pdef, f"{q} {date_filter}", date_label))
+                        full_q = f"{q} {date_filter}"
+                        if QUERY_FILTER:
+                            full_q = f"{full_q} {QUERY_FILTER}"
+                        search_tasks.append((provider_enum, pdef, full_q, date_label))
 
             total_tasks = len(search_tasks)
             stats.queries_run += total_tasks
@@ -613,7 +629,7 @@ def show_logo():
     print(f"  {c('K','仅限授权的安全研究使用')}\n")
 
 # Token 本地保存
-TOKEN_STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".token_store.json")
+TOKEN_STORE_FILE = os.path.join(os.path.expanduser("~/Desktop"), ".token_store.json")
 
 def _load_token_store():
     if not os.path.exists(TOKEN_STORE_FILE): return []
@@ -643,7 +659,7 @@ def _delete_token_profile(name):
 def input_token():
     saved = _load_token_store()
     if saved:
-        print(c("bold","\n[1/3] 配置GitHub Token"))
+        print(c("bold","\n[1/4] 配置GitHub Token"))
         print(f"  已保存的配置：")
         for i, p in enumerate(saved, 1):
             print(f"    {i}. {p['name']} ({len(p['tokens'])}个)")
@@ -671,7 +687,7 @@ def input_token():
         return _manual_token_input([])
 
 def _manual_token_input(saved):
-    print(c("bold","\n[1/3] 配置GitHub Token"))
+    print(c("bold","\n[1/4] 配置GitHub Token"))
     print(f"  {c('C','https://github.com/settings/tokens')}  -> 创建 classic token，不用勾权限")
     print(f"  支持多个同时输入（token越多 扫描速度越快） 多个用逗号/空格/换行隔开都行")
     all_tokens = []
@@ -734,7 +750,7 @@ def _delete_menu(saved):
     except: pass
 
 def select_providers():
-    print(c("bold","\n[2/3] 选择厂商"))
+    print(c("bold","\n[2/4] 选择厂商"))
     pl = list(Provider)
     for i, p in enumerate(pl, 1):
         cn = PROVIDER_CN.get(p.value, p.value)
@@ -768,15 +784,15 @@ def select_providers():
         print(f"  重新选择")
 
 def input_pages():
-    print(c("bold","\n[3/3] 页码范围"))
-    print(f"  1-3快速 1-5中等 1-10最大  每页100条最多1000条")
+    print(c("bold","\n[3/4] 搜索范围"))
+    print(f"  例如1~10 范围越大 搜索时间越长")
     while True:
         try: ch = input(f"  范围 (回车=1-3): ").strip()
         except: return 1, 3, ""
         if not ch: sp, ep = 1, 3; break
         m = re.match(r'(\d+)\s*[-–—]\s*(\d+)', ch)
-        if m: sp = max(1, min(10, int(m.group(1)))); ep = max(sp, min(10, int(m.group(2)))); break
-        try: sp = 1; ep = max(1, min(10, int(ch))); break
+        if m: sp = max(1, int(m.group(1))); ep = max(sp, int(m.group(2))); break
+        try: sp = 1; ep = max(1, int(ch)); break
         except: print(f"  格式: 1-5")
     try: kw = input(f"  自定义关键词,逗号分隔 (回车跳过): ").strip()
     except: kw = ""
@@ -784,6 +800,32 @@ def input_pages():
         global CUSTOM_QUERIES
         CUSTOM_QUERIES = [x.strip() for x in kw.split(",") if x.strip()]
     return sp, ep, kw
+
+def input_sort_order():
+    global SORT_FIELD, SORT_ORDER, QUERY_FILTER
+    print(c("bold","\n[4/4] 排序/筛选"))
+    print(f"    1. 最新提交  ← 默认")
+    print(f"    2. 最多Star")
+    print(f"    3. 最少Star")
+    print(f"    4. 最佳匹配")
+    while True:
+        try: ch = input(f"  选择 (回车=1): ").strip()
+        except: return
+        if not ch or ch == "1":
+            SORT_FIELD, SORT_ORDER, QUERY_FILTER = "indexed", "desc", ""; break
+        if ch == "2":
+            SORT_FIELD, SORT_ORDER, QUERY_FILTER = "", "", "stars:>50"; break
+        if ch == "3":
+            SORT_FIELD, SORT_ORDER, QUERY_FILTER = "", "", "stars:<5"; break
+        if ch == "4":
+            SORT_FIELD, SORT_ORDER, QUERY_FILTER = "", "", ""; break
+        print(f"  无效选择")
+    if QUERY_FILTER:
+        print(f"  筛选: {QUERY_FILTER}")
+    elif SORT_FIELD:
+        print(f"  排序: {SORT_FIELD} / {SORT_ORDER}")
+    else:
+        print(f"  排序: 最佳匹配")
 
 def _compute_balance_totals(results):
     totals = {}
@@ -870,6 +912,9 @@ def parse_args():
     p.add_argument("--output",default="api_key_leak_results.json")
     p.add_argument("--csv",default="")
     p.add_argument("--days",type=int,default=7,help="只搜最近N天提交的仓库，默认7天")
+    p.add_argument("--sort",default=None,choices=["indexed",""],help="排序字段，默认indexed。留空=最佳匹配")
+    p.add_argument("--order",default=None,choices=["desc","asc"],help="排序方向，默认desc")
+    p.add_argument("--stars",default=None,help="Star筛选，如 '>50' 或 '<5'")
     p.add_argument("--no-interactive",action="store_true",help="纯自动模式，不交互")
     return p.parse_args()
 
@@ -912,8 +957,25 @@ async def main():
             sp, ep, kw = input_pages()
         else:
             sp, ep = 1, 3
-    sp = max(1, min(10, sp)); ep = max(sp, min(10, ep))
+    sp = max(1, sp); ep = max(sp, ep)
     print(f"  页码: {sp}-{ep} ({ep-sp+1}页)")
+
+    # 排序
+    global SORT_FIELD, SORT_ORDER, QUERY_FILTER
+    if args.stars is not None:
+        QUERY_FILTER = f"stars:{args.stars}"
+        SORT_FIELD, SORT_ORDER = "", ""
+    elif args.sort is not None or args.order is not None:
+        SORT_FIELD = args.sort if args.sort is not None else "indexed"
+        SORT_ORDER = args.order if args.order is not None else "desc"
+    elif interactive:
+        input_sort_order()
+    if QUERY_FILTER:
+        print(f"  筛选: {QUERY_FILTER}")
+    elif SORT_FIELD:
+        print(f"  排序: {SORT_FIELD} / {SORT_ORDER}")
+    else:
+        print(f"  排序: 最佳匹配")
 
     concurrency = args.concurrency or 25
 
