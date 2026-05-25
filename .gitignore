@@ -2,3 +2,6 @@
 .token_store.json
 *.json
 __pycache__/
+build/
+dist/
+*.spec

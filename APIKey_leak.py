@@ -671,7 +671,10 @@ def show_logo():
     print(f"  {c('K','仅限授权的安全研究使用')}\n")
 
 # Token 本地保存
-TOKEN_STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".token_store.json")
+if getattr(sys, "frozen", False):
+    TOKEN_STORE_FILE = os.path.join(os.path.dirname(sys.executable), ".token_store.json")
+else:
+    TOKEN_STORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".token_store.json")
 
 def _load_token_store():
     if not os.path.exists(TOKEN_STORE_FILE): return []
