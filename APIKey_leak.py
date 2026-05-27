@@ -1002,7 +1002,7 @@ def parse_args():
     p.add_argument("--providers",nargs="*",default=[],help="厂商")
     p.add_argument("--start-page",type=int,default=0); p.add_argument("--end-page",type=int,default=0)
     p.add_argument("--concurrency",type=int,default=0)
-    p.add_argument("--output",default="api_key_leak_results.json")
+    p.add_argument("--output",default="api_key_leak_results.txt")
     p.add_argument("--csv",default="")
     p.add_argument("--sort",default=None,choices=["indexed",""],help="排序字段，默认indexed。留空=最佳匹配")
     p.add_argument("--order",default=None,choices=["desc","asc"],help="排序方向，默认desc")
@@ -1083,17 +1083,10 @@ async def main():
             start_page=sp, end_page=ep, concurrency=concurrency,
             target=target, extra_queries=None)
 
-        # 输出
+        # 输出 TXT
         print_results(results, stats)
         _print_key_list(results)
-        out={ "scan_stats":asdict(stats),
-              "results":{p:[asdict(vk) for vk in ks] for p,ks in results.items()} }
-        with open(args.output,"w",encoding="utf-8") as f:
-            json.dump(out,f,indent=2,ensure_ascii=False)
-        print(f"  已保存: {args.output}")
-
-        txt_path = os.path.splitext(args.output)[0] + ".txt"
-        _save_txt(results, stats, txt_path)
+        _save_txt(results, stats, args.output)
 
         if args.csv:
             import csv
